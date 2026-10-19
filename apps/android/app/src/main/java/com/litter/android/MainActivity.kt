@@ -30,6 +30,9 @@ import com.litter.android.state.AppLifecycleController
 import com.litter.android.state.AppModel
 import com.litter.android.state.OpenAIApiKeyStore
 import com.litter.android.state.PetOverlayController
+import com.litter.android.live.LiveConnectionController
+import com.litter.android.live.LiveConnectionPrefs
+import com.litter.android.live.LiveConnectionService
 import com.litter.android.ui.AnimatedSplashScreen
 import com.litter.android.ui.ExperimentalFeatures
 import com.litter.android.ui.LitterApp
@@ -65,6 +68,7 @@ class MainActivity : ComponentActivity() {
         // theme-background flash between them.
         installSplashScreen()
         super.onCreate(savedInstanceState)
+        LiveConnectionController.activityAlive = true
         EdgeToEdge.apply(
             this,
             darkBars = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
@@ -72,6 +76,7 @@ class MainActivity : ComponentActivity() {
         )
         OpenAIApiKeyStore(applicationContext).applyToEnvironment()
         ExperimentalFeatures.initialize(applicationContext)
+        LiveConnectionPrefs.initialize(applicationContext)
         PetOverlayController.initialize(applicationContext)
 
         try {
@@ -82,6 +87,7 @@ class MainActivity : ComponentActivity() {
             LLog.e("MainActivity", "AppModel.start() failed", e)
         }
         loadPushToken()
+        requestNotificationPermissionIfNeeded()
 
         var showSplash by mutableStateOf(true)
         var contentReady by mutableStateOf(false)
@@ -137,6 +143,7 @@ class MainActivity : ComponentActivity() {
         val model = appModel ?: return
         lifecycleScope.launch {
             lifecycleController.onResume(this@MainActivity, model)
+            LiveConnectionController.onActivityResumed(this@MainActivity, model, lifecycleScope)
             PetOverlayController.syncOverlayService(this@MainActivity)
         }
     }
@@ -145,6 +152,7 @@ class MainActivity : ComponentActivity() {
         super.onPause()
         val model = appModel ?: return
         lifecycleController.onPause(this, model)
+        LiveConnectionController.onActivityPaused(this, model)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -155,14 +163,17 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        LiveConnectionController.activityAlive = false
         // Best-effort graceful shutdown of the iroh endpoint before the
         // Activity is fully destroyed. `runBlocking` keeps the close
         // handshake bounded so we don't ANR if the network stack is
         // unresponsive; `withTimeoutOrNull` caps it.
-        appModel?.let { model ->
-            kotlinx.coroutines.runBlocking {
-                kotlinx.coroutines.withTimeoutOrNull(2_500) {
-                    model.client.shutdownAlleycatEndpoint()
+        if (!isChangingConfigurations && !LiveConnectionService.isRunning) {
+            appModel?.let { model ->
+                kotlinx.coroutines.runBlocking {
+                    kotlinx.coroutines.withTimeoutOrNull(2_500) {
+                        model.client.shutdownAlleycatEndpoint()
+                    }
                 }
             }
         }
@@ -219,8 +230,6 @@ class MainActivity : ComponentActivity() {
             LLog.i("MainActivity", "Firebase is not configured; skipping FCM token fetch: ${e.message}")
             return
         }
-        requestNotificationPermissionIfNeeded()
-
         messaging.token
             .addOnSuccessListener { token ->
                 if (token.isNotBlank()) {

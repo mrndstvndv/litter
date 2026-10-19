@@ -1,6 +1,7 @@
 package com.litter.android.state
 
 import android.content.Context
+import com.litter.android.live.LiveConnectionController
 import com.litter.android.push.PushProxyClient
 import com.litter.android.util.LLog
 import kotlinx.coroutines.CoroutineScope
@@ -111,7 +112,7 @@ class AppLifecycleController {
         lastBackgroundedAt = null
         if (backgroundedAt != null) {
             val durationMs = System.currentTimeMillis() - backgroundedAt
-            if (durationMs > LONG_RESUME_THRESHOLD_MS) {
+            if (durationMs > LONG_RESUME_THRESHOLD_MS && !LiveConnectionController.keptAliveThroughBackground) {
                 LLog.i(
                     "AppLifecycleController",
                     "long resume — abandoning live alleycat connections backgroundDurationSec=${durationMs / 1000}",
@@ -119,6 +120,7 @@ class AppLifecycleController {
                 appModel.reconnectController.onLongResume()
             }
         }
+        LiveConnectionController.clearBackgroundTracking()
 
         val results = appModel.reconnectController.onAppBecameActive()
         results.forEach { appModel.recordSshHostKeyChange(it.serverId, it.errorMessage) }

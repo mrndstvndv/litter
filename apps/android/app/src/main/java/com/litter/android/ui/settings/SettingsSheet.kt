@@ -103,6 +103,10 @@ import com.litter.android.state.isConnected
 import com.litter.android.state.statusColor
 import com.litter.android.state.statusLabel
 import com.litter.android.state.toRecord
+import com.litter.android.live.LiveConnectionController
+import com.litter.android.live.LiveConnectionPrefs
+import com.litter.android.live.LiveConnectionService
+import com.litter.android.live.Mode
 import com.litter.android.ui.LocalAppModel
 import com.litter.android.ui.LitterAppearanceMode
 import com.litter.android.ui.LitterColorThemeType
@@ -203,6 +207,19 @@ private fun SettingsTopLevel(
     val snapshot by appModel.snapshot.collectAsState()
     val scope = rememberCoroutineScope()
     val collapseTurns = ConversationPrefs.areTurnsCollapsed
+    val liveMode = LiveConnectionPrefs.mode
+    var showLiveModeMenu by remember { mutableStateOf(false) }
+    val powerManager = remember(context) {
+        context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+    }
+    var ignoresBatteryOptimizations by remember(context) {
+        mutableStateOf(powerManager.isIgnoringBatteryOptimizations(context.packageName))
+    }
+    val batteryOptimizationLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) {
+        ignoresBatteryOptimizations = powerManager.isIgnoringBatteryOptimizations(context.packageName)
+    }
     var renameTarget by remember { mutableStateOf<AppServerSnapshot?>(null) }
     var renameText by remember { mutableStateOf("") }
 
@@ -309,6 +326,93 @@ private fun SettingsTopLevel(
                         onCheckedChange = { ConversationPrefs.setCollapseTurns(context, it) },
                         colors = SwitchDefaults.colors(checkedTrackColor = LitterTheme.textPrimary),
                     )
+                },
+            )
+        }
+
+        // ── Background ──
+        item { SectionHeader("Background") }
+        item {
+            val modeDescription = when (liveMode) {
+                Mode.OFF -> "No background connection or notifications"
+                Mode.WHILE_WORKING -> "Stay connected while agents work"
+                Mode.ALWAYS -> "Keep a connection to saved computers"
+            }
+            SettingsRow(
+                label = "Stay connected in background",
+                subtitle = modeDescription,
+                trailing = {
+                    Box {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                when (liveMode) {
+                                    Mode.OFF -> "Off"
+                                    Mode.WHILE_WORKING -> "While working"
+                                    Mode.ALWAYS -> "Always"
+                                },
+                                color = LitterTheme.textSecondary,
+                                fontSize = 13.sp,
+                            )
+                            Icon(
+                                Icons.Default.ChevronRight,
+                                null,
+                                tint = LitterQuiet.meta,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showLiveModeMenu,
+                            onDismissRequest = { showLiveModeMenu = false },
+                        ) {
+                            listOf(Mode.OFF, Mode.WHILE_WORKING, Mode.ALWAYS).forEach { option ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            when (option) {
+                                                Mode.OFF -> "Off"
+                                                Mode.WHILE_WORKING -> "While working"
+                                                Mode.ALWAYS -> "Always"
+                                            },
+                                        )
+                                    },
+                                    onClick = {
+                                        LiveConnectionPrefs.setMode(context, option)
+                                        if (LiveConnectionController.wantRunning(context, appModel)) {
+                                            LiveConnectionController.ensureRunning(context)
+                                        } else {
+                                            context.stopService(Intent(context, LiveConnectionService::class.java))
+                                        }
+                                        showLiveModeMenu = false
+                                    },
+                                )
+                            }
+                        }
+                    }
+                },
+                onClick = { showLiveModeMenu = true },
+            )
+        }
+        item {
+            SettingsRow(
+                label = "Battery optimisation",
+                subtitle = if (ignoresBatteryOptimizations) "Allowed" else "Restricted — tap to allow",
+                trailing = {
+                    Icon(
+                        Icons.Default.ChevronRight,
+                        null,
+                        tint = LitterQuiet.meta,
+                        modifier = Modifier.size(18.dp),
+                    )
+                },
+                onClick = {
+                    if (!ignoresBatteryOptimizations) {
+                        batteryOptimizationLauncher.launch(
+                            Intent(
+                                android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                Uri.parse("package:${context.packageName}"),
+                            ),
+                        )
+                    }
                 },
             )
         }
